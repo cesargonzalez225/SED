@@ -1,13 +1,63 @@
+/* USER CODE BEGIN Header */
+/**
+  **************************
+  * @file           : main.c
+  * @brief          : Main program body
+  **************************
+  * @attention
+  *
+  * Copyright (c) 2024 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  **************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stm32f4xx_hal.h"
+#include "adc.h"
+#include "dma.h"
+#include "spi.h"
+#include "gpio.h"
 #include <stdlib.h>
 #include <time.h>
+#include "stm32f4xx_hal.h"
 
-/* Define macros and global variables */
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
 #define NUM_DEV 4 // Number of MAX7219 devices
 #define BOARD_WIDTH (NUM_DEV * 8)
 #define BOARD_HEIGHT 8
+#define TOLERANCE 20
+/* USER CODE END PD */
 
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN PV */
+uint32_t adc_value[2];
+volatile uint32_t valor_actual = 0;
+volatile uint32_t sentido_giro = 0;
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
 /* Tetris piece definitions */
 const uint8_t tetrisPieces[7][4] = {
     {0b1111, 0, 0, 0}, // I piece
@@ -21,7 +71,6 @@ const uint8_t tetrisPieces[7][4] = {
 
 uint8_t bufferCol[NUM_DEV * 8]; // Buffer for column data
 uint8_t gameBoard[BOARD_HEIGHT][BOARD_WIDTH] = {0}; // Game board
-SPI_HandleTypeDef hspi1; // SPI handle
 
 // Tetris piece state
 struct TetrisPiece {
@@ -34,8 +83,8 @@ struct TetrisPiece currentPiece;
 
 /* Function prototypes */
 void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
-static void MX_SPI1_Init(void);
+//static void MX_GPIO_Init(void);
+//static void MX_SPI1_Init(void);
 void max_write(int row, uint8_t data);
 void flushBuffer(void);
 void max7219_cmd(uint8_t Addr, uint8_t data);
@@ -48,57 +97,136 @@ int checkCollision(void);
 void lockPiece(void);
 void clearFullRows(void);
 
-/* Main function */
+/* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
 int main(void)
 {
-    /* Initialization code */
-    HAL_Init();
-    SystemClock_Config();
-    MX_GPIO_Init();
-    MX_SPI1_Init();
+  /* USER CODE BEGIN 1 */
 
-    /* Initialize random seed */
-    srand(HAL_GetTick());
+  /* USER CODE END 1 */
 
-    /* Initialize the matrix display */
-    matrixInit();
-    clearDisplay();
+  /* MCU Configuration--------------------------------------------------------*/
 
-    /* Spawn first piece */
-    spawnNewPiece();
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 
-    while (1)
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  HAL_Init();
+  SystemClock_Config();
+  MX_GPIO_Init();
+  MX_DMA_Init();
+  MX_ADC1_Init();
+  MX_SPI1_Init();
+
+  /* USER CODE BEGIN 2 */
+  HAL_ADC_Start_DMA(&hadc1, adc_value, 2);
+  srand(HAL_GetTick());
+  matrixInit();
+  clearDisplay();
+  spawnNewPiece();
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+    /* Clear the display buffer */
+    for (int i = 0; i < NUM_DEV * 8; i++)
     {
-        /* Clear the display buffer */
-        for (int i = 0; i < NUM_DEV * 8; i++)
+        bufferCol[i] = 0;
+    }
+
+    /* Draw current piece */
+    drawPiece();
+
+    /* Refresh the display */
+    flushBuffer();
+
+    /* Wait for 500 milliseconds */
+    HAL_Delay(500);
+
+    /* Move the Tetris piece to the left */
+    currentPiece.x--;
+
+    /* Check for collision */
+    if (checkCollision())
+    {
+        /* Move back and lock the piece */
+        currentPiece.x++;
+        lockPiece();
+        clearFullRows();
+        spawnNewPiece();
+    }
+
+    /* Read the ADC value */
+    uint32_t previous_value = valor_actual;
+    valor_actual = adc_value[0]; // Read the ADC value
+
+    /* Determine movement direction based on ADC value */
+    if (valor_actual > (previous_value + TOLERANCE))
+    {
+        sentido_giro = 1; // Indicates increasing value
+        currentPiece.y++; // Move piece down
+    }
+    else if (valor_actual < (previous_value - TOLERANCE))
+    {
+        sentido_giro = 2; // Indicates decreasing value
+        currentPiece.y--; // Move piece up
+    }
+    else
+    {
+        sentido_giro = 0; // Indicates no significant change
+    }
+
+    /* Ensure the piece stays within vertical bounds */
+    if (currentPiece.y < 0)
+    {
+        currentPiece.y = 0;
+    }
+    else if (currentPiece.y > BOARD_HEIGHT - 4)
+    {
+        currentPiece.y = BOARD_HEIGHT - 4;
+    }
+
+    /* Check for collision after moving up or down */
+    if (checkCollision())
+    {
+        /* Undo the move if it causes a collision */
+        if (sentido_giro == 1)
         {
-            bufferCol[i] = 0;
+            currentPiece.y--;
         }
-
-        /* Draw current piece */
-        drawPiece();
-
-        /* Refresh the display */
-        flushBuffer();
-
-        /* Wait for 500 milliseconds */
-        HAL_Delay(500);
-
-        /* Move the Tetris piece to the left */
-        currentPiece.x--;
-
-        /* Check for collision */
-        if (checkCollision())
+        else if (sentido_giro == 2)
         {
-            /* Move back and lock the piece */
-            currentPiece.x++;
-            lockPiece();
-            clearFullRows();
-            spawnNewPiece();
+            currentPiece.y++;
         }
     }
+  }
 }
-
 /* Spawn a new random Tetris piece */
 void spawnNewPiece(void)
 {
@@ -312,94 +440,80 @@ void clearDisplay(void)
     flushBuffer();
 }
 
-/* System Clock Configuration function */
 void SystemClock_Config(void)
 {
-    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-    /** Configure the main internal regulator output voltage */
-    __HAL_RCC_PWR_CLK_ENABLE();
-    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+  /** Configure the main internal regulator output voltage
+  */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
-    /** Initializes the RCC Oscillators according to the specified parameters
-    * in the RCC_OscInitTypeDef structure.
-    */
-    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-    RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-    RCC_OscInitStruct.PLL.PLLM = 8;
-    RCC_OscInitStruct.PLL.PLLN = 168;
-    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-    RCC_OscInitStruct.PLL.PLLQ = 7;
-    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-    {
-        Error_Handler();
-    }
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 8;
+  RCC_OscInitStruct.PLL.PLLN = 50;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
+  RCC_OscInitStruct.PLL.PLLQ = 7;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-    /** Initializes the CPU, AHB and APB buses clocks */
-    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                                  |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
-    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV8;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV4;
 
-    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
-    {
-        Error_Handler();
-    }
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
-/* SPI1 Initialization function */
-static void MX_SPI1_Init(void)
-{
-    hspi1.Instance = SPI1;
-    hspi1.Init.Mode = SPI_MODE_MASTER;
-    hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-    hspi1.Init.DataSize = SPI_DATASIZE_16BIT;
-    hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
-    hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-    hspi1.Init.NSS = SPI_NSS_SOFT;
-    hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
-    hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
-    hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
-    hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-    hspi1.Init.CRCPolynomial = 10;
-    if (HAL_SPI_Init(&hspi1) != HAL_OK)
-    {
-        Error_Handler();
-    }
-}
+/* USER CODE BEGIN 4 */
 
-/* GPIO Initialization function */
-static void MX_GPIO_Init(void)
-{
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
+/* USER CODE END 4 */
 
-    /* GPIO Ports Clock Enable */
-    __HAL_RCC_GPIOH_CLK_ENABLE();
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-
-    /*Configure GPIO pin Output Level */
-    HAL_GPIO_WritePin(CS_GPIO_Port, CS_Pin, GPIO_PIN_SET);
-
-    /*Configure GPIO pin : CS_Pin */
-    GPIO_InitStruct.Pin = CS_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(CS_GPIO_Port, &GPIO_InitStruct);
-}
-
-/* Error Handler function */
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
 void Error_Handler(void)
 {
-    __disable_irq();
-    while (1)
-    {
-        // Stay here in case of error
-    }
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
 }
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
